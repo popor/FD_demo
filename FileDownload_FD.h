@@ -1,9 +1,7 @@
 //
 //  SDDownload.h
-//  WanziTG
 //
 //  Created by popor on 15/6/11.
-//  Copyright (c) 2015年 wanzi. All rights reserved.
 //
 // 模仿SDWebImageView方案
 // change 'Compile Sources As' to 'Objective-C++'
@@ -25,6 +23,8 @@ typedef void(^FD_CompletedBlock)(BOOL isNetError, BOOL finished);
 @property(nonatomic, strong)NSNumber  			*fileSize;
 
 @property(nonatomic, strong)NSMutableDictionary	*blockDic;
+
+@property(nonatomic, strong)NSMutableArray		*otherDownloaderArray, *otherProgressBlockArray, *otherCompletedBlockArray;
 
 // 只提供下载一种方式.
 - (void)downloadFileURL:(NSURL *)url progress:(FD_ProgressBlock)progressBlock complete:(FD_CompletedBlock)completedBlock;

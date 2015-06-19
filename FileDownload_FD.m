@@ -1,15 +1,13 @@
 //
 //  SDDownload.m
-//  WanziTG
 //
 //  Created by popor on 15/6/11.
-//  Copyright (c) 2015年 wanzi. All rights reserved.
 //
 
 #import "FileDownload_FD.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <objc/runtime.h>
-
+#import "FileDownload_FDManager.h"
 
 #define kTHDownLoadTask_TempSuffix  @".TempDownload"
 #define ProgressID					@"ProgressID"
@@ -17,32 +15,54 @@
 
 // copy of SDWebImage
 #define dispatch_main_sync_safe_FD(block)\
-	if ([NSThread isMainThread]) {\
-		block();\
-	} else {\
-		dispatch_sync(dispatch_get_main_queue(), block);\
-	}
+if ([NSThread isMainThread]) {\
+block();\
+} else {\
+dispatch_sync(dispatch_get_main_queue(), block);\
+}
 
 //
 #define dispatch_main_async_safe_FD(block)\
-	if ([NSThread isMainThread]) {\
-		block();\
-	} else {\
-		dispatch_async(dispatch_get_main_queue(), block);\
-	}
+if ([NSThread isMainThread]) {\
+block();\
+} else {\
+dispatch_async(dispatch_get_main_queue(), block);\
+}
 
 
 @implementation NSObject(FileDownload)
 
-- (void)downloadFileURL:(NSURL *)url
-               progress:(FD_ProgressBlock)progressBlock
-               complete:(FD_CompletedBlock)completedBlock
+- (void)downloadFileURL:(NSURL *)url progress:(FD_ProgressBlock)progressBlock complete:(FD_CompletedBlock)completedBlock
 {
+    if (!url) {
+        return;
+    }else{
+        FileDownload_FDManager * oneFDManager=[FileDownload_FDManager getDefaultFileDownload_FDManager];
+        if (![oneFDManager isNeedDownloadURL:url withDownloader:self]) {
+            if (self == [oneFDManager.downloaderDic objectForKey:url.absoluteString]) {
+                // Do Nothing.
+            }else{
+                // Let beforeDownloader monitor the newDownloader.
+                NSObject * beforeDownloader=[oneFDManager.downloaderDic objectForKey:url.absoluteString];
+                [beforeDownloader monitorDownloader:self Progress:progressBlock complete:completedBlock];
+            }
+            return;
+        }
+    }
     self.webURL=url;
     if (!self.blockDic) {
         self.blockDic=[[NSMutableDictionary alloc] init];
         [self.blockDic setObject:progressBlock 	forKey:ProgressID];
         [self.blockDic setObject:completedBlock forKey:CompleteID];
+    }
+    if (!self.otherProgressBlockArray) {
+        self.otherProgressBlockArray=[[NSMutableArray alloc] init];
+    }
+    if (!self.otherCompletedBlockArray) {
+        self.otherCompletedBlockArray=[[NSMutableArray alloc] init];
+    }
+    if (!self.otherDownloaderArray) {
+        self.otherDownloaderArray=[[NSMutableArray alloc] init];
     }
     dispatch_main_async_safe_FD(^{
         [self startDownloadFile];
@@ -50,6 +70,19 @@
     //    dispatch_async(dispatch_get_main_queue(), ^{
     //        [self startDownloadFile];
     //    });
+}
+
+- (void)monitorDownloader:(NSObject *)downloader Progress:(FD_ProgressBlock)progressBlock complete:(FD_CompletedBlock)completedBlock
+{
+    if (![self.otherDownloaderArray containsObject:downloader]) {
+        [self.otherDownloaderArray addObject:downloader];
+        if (![self.otherProgressBlockArray containsObject:progressBlock]) {
+            [self.otherProgressBlockArray addObject:progressBlock];
+        }
+        if (![self.otherCompletedBlockArray containsObject:completedBlock]) {
+            [self.otherCompletedBlockArray addObject:completedBlock];
+        }
+    }
 }
 
 - (void)startDownloadFile
@@ -114,7 +147,7 @@
     }
 }
 
-- (void)stop
+- (void)stopDownload
 {
     [self closeConnection];
     [self startInThread:NO];
@@ -177,7 +210,7 @@
     }
     [[NSFileManager defaultManager] moveItemAtPath:self.temporaryPath toPath:self.destinationPath error:nil];
     
-    [self stop];
+    [self stopDownload];
     [self closeFileWrite];
     [self completeNetError:NO isDownloaded:YES];
 }
@@ -187,6 +220,9 @@
     FD_ProgressBlock _myPB=[self.blockDic objectForKey:ProgressID];
     dispatch_main_sync_safe_FD(^{
         _myPB(progress);
+        for (FD_ProgressBlock _otherPB in self.otherProgressBlockArray) {
+            _otherPB(progress);
+        }
     });
 }
 
@@ -195,11 +231,25 @@
     FD_CompletedBlock myCB=[self.blockDic objectForKey:CompleteID];
     dispatch_main_sync_safe_FD(^{
         myCB(isNetError, isDownloaded);
+        for (FD_CompletedBlock _otherCB in self.otherCompletedBlockArray) {
+            _otherCB(isNetError, isDownloaded);
+        }
     });
+    [self removeManagerMonitor];
     //    return;
     //    dispatch_async(dispatch_get_main_queue(), ^{
     //        myCB(isNetError, isDownloaded);
     //    });
+}
+
+- (void)removeManagerMonitor
+{
+    FileDownload_FDManager * oneFDManager=[FileDownload_FDManager getDefaultFileDownload_FDManager];
+    [oneFDManager removeURL:self.webURL withDownloader:self];
+    
+    [self.otherDownloaderArray 		removeAllObjects];
+    [self.otherCompletedBlockArray 	removeAllObjects];
+    [self.otherProgressBlockArray 	removeAllObjects];
 }
 
 
@@ -283,6 +333,36 @@
 - (NSMutableDictionary *)blockDic
 {
     return objc_getAssociatedObject(self, @"blockDic_FD");
+}
+
+- (void)setOtherDownloaderArray:(NSMutableArray *)otherDownloaderArray
+{
+    objc_setAssociatedObject(self, @"otherDownloaderArray", otherDownloaderArray, OBJC_ASSOCIATION_RETAIN);
+}
+
+- (NSMutableArray *)otherDownloaderArray
+{
+    return objc_getAssociatedObject(self, @"otherDownloaderArray");
+}
+
+- (void)setOtherProgressBlockArray:(NSMutableArray *)otherProgressBlockArray
+{
+    objc_setAssociatedObject(self, @"otherProgressBlockArray", otherProgressBlockArray, OBJC_ASSOCIATION_RETAIN);
+}
+
+- (NSMutableArray *)otherProgressBlockArray
+{
+    return objc_getAssociatedObject(self, @"otherProgressBlockArray");
+}
+
+- (void)setOtherCompletedBlockArray:(NSMutableArray *)otherCompletedBlockArray
+{
+    objc_setAssociatedObject(self, @"otherCompletedBlockArray", otherCompletedBlockArray, OBJC_ASSOCIATION_RETAIN);
+}
+
+- (NSMutableArray *)otherCompletedBlockArray
+{
+    return objc_getAssociatedObject(self, @"otherCompletedBlockArray");
 }
 
 /**
